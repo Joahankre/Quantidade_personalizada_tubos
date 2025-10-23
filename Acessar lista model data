@@ -1,1 +1,97 @@
+Imports System.Windows.Forms
+Imports Inventor
+
+Sub Main()
+
+    Dim doc As Document = ThisApplication.ActiveDocument
+    If doc.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
+        MessageBox.Show("Execute este script em um documento de montagem (.iam).", "Documento inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+        Return
+    End If
+
+    Dim asmDoc As AssemblyDocument = doc
+    Dim bom As BOM = asmDoc.ComponentDefinition.BOM
+
+    bom.StructuredViewEnabled = True
+
+    Dim modelDataView As BOMView = Nothing
+    For Each view As BOMView In bom.BOMViews
+        If View.ViewType = BOMViewTypeEnum.kModelDataBOMViewType Then
+            modelDataView = View
+            Exit For
+        End If
+    Next
+
+    If modelDataView Is Nothing Then
+        MessageBox.Show("BOM View do tipo Model Data não encontrada.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        Return
+    End If
+
+    Dim message As New System.Text.StringBuilder()
+    message.AppendLine("Itens do BOM - Model Data:")
+    message.AppendLine("")
+
+    For Each row As BOMRow In modelDataView.BOMRows
+        Dim itemNumber As String = Row.ItemNumber
+        Dim partNumber As String = ""
+        Dim description As String = ""
+
+        Try
+            If Row.ComponentDefinitions.Count > 0 Then
+                Dim compDef As ComponentDefinition = Row.ComponentDefinitions.Item(1)
+                Dim docPart As Document = compDef.Document
+
+                Dim props = docPart.PropertySets.Item("Design Tracking Properties")
+                Try
+                    partNumber = props.Item("Part Number").Value
+                Catch
+                    partNumber = "(sem Part Number)"
+                End Try
+
+                Try
+                    description = props.Item("Description").Value
+                Catch
+                    description = "(sem descrição)"
+                End Try
+            End If
+        Catch
+            partNumber = "(erro)"
+            description = "(erro)"
+        End Try
+
+        message.AppendLine(String.Format("Item: {0} - Part Number: {1} - Descrição: {2}", itemNumber, partNumber, description))
+    Next
+
+    ' Criar formulário para mostrar o texto e permitir cópia
+    Dim form As New Form With {
+        .Text = "Resumo do BOM Model Data",
+        .Width = 700,
+        .Height = 500,
+        .StartPosition = FormStartPosition.CenterScreen
+    }
+
+    Dim textBox As New System.Windows.Forms.TextBox With {
+        .Multiline = True,
+        .ReadOnly = True,
+        .ScrollBars = ScrollBars.Vertical,
+        .Dock = DockStyle.Fill,
+		.Text = message.ToString()
+    }
+
+    form.Controls.Add(textBox)
+
+    ' Botão fechar
+    Dim btnClose As New Button With {
+        .Text = "Fechar",
+        .Dock = DockStyle.Bottom,
+        .Height = 30
+    }
+    AddHandler btnClose.Click, Sub(sender, e) form.Close()
+    form.Controls.Add(btnClose)
+
+    form.ShowDialog()
+
+End Sub
+
+
 
