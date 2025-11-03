@@ -1,0 +1,102 @@
+Imports System.Windows.Forms
+Imports Inventor
+Imports System.Text
+
+Sub Main()
+    Dim doc As Document = ThisApplication.ActiveDocument
+    If doc.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
+        MessageBox.Show("Execute este script em um documento de montagem (.iam).", "Documento inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+        Return
+    End If
+
+    Dim asmDoc As AssemblyDocument = doc
+    Dim bom As BOM = asmDoc.ComponentDefinition.BOM
+    bom.StructuredViewEnabled = True
+
+    Dim modelDataView As BOMView = Nothing
+    For Each view As BOMView In bom.BOMViews
+        If View.ViewType = BOMViewTypeEnum.kModelDataBOMViewType Then
+            modelDataView = View
+            Exit For
+        End If
+    Next
+
+    If modelDataView Is Nothing Then
+        MessageBox.Show("BOM View do tipo Model Data não encontrada.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        Return
+    End If
+
+    Dim sb As New StringBuilder()
+    sb.AppendLine("Itens do BOM - Model Data (Todos os níveis):")
+    sb.AppendLine("")
+
+    ' Chama função recursiva para percorrer todos os níveis
+    For Each row As BOMRow In modelDataView.BOMRows
+        AdicionarBOMRowRecursivo(Row, sb, "")
+    Next
+
+    ' Criar formulário para mostrar o texto
+    Dim form As New Form With {
+        .Text = "Resumo do BOM Model Data",
+        .Width = 700,
+        .Height = 500,
+        .StartPosition = FormStartPosition.CenterScreen
+    }
+
+    Dim textBox As New System.Windows.Forms.TextBox With {
+        .Multiline = True,
+        .ReadOnly = True,
+        .ScrollBars = ScrollBars.Vertical,
+        .Dock = DockStyle.Fill,
+        .Text = sb.ToString()
+    }
+    form.Controls.Add(textBox)
+
+    ' Botão fechar
+    Dim btnClose As New Button With {
+        .Text = "Fechar",
+        .Dock = DockStyle.Bottom,
+        .Height = 30
+    }
+    AddHandler btnClose.Click, Sub(sender, e) form.Close()
+    form.Controls.Add(btnClose)
+
+    form.ShowDialog()
+End Sub
+
+' Função recursiva para percorrer todos os níveis do BOM
+Sub AdicionarBOMRowRecursivo(row As BOMRow, sb As StringBuilder, indent As String)
+    Dim itemNumber As String = row.ItemNumber
+    Dim partNumber As String = "(sem Part Number)"
+    Dim description As String = "(sem descrição)"
+
+    Try
+        If row.ComponentDefinitions.Count > 0 Then
+            Dim compDef As ComponentDefinition = row.ComponentDefinitions.Item(1)
+            Dim docPart As Document = compDef.Document
+            Dim props = docPart.PropertySets.Item("Design Tracking Properties")
+
+            Try
+                partNumber = props.Item("Part Number").Value.ToString()
+            Catch
+            End Try
+
+            Try
+                description = props.Item("Description").Value.ToString()
+            Catch
+            End Try
+        End If
+    Catch
+        partNumber = "(erro)"
+        description = "(erro)"
+    End Try
+
+    sb.AppendLine(String.Format("{0}Item: {1} - Part Number: {2} - Descrição: {3}", indent, itemNumber, partNumber, description))
+
+    ' Chamada recursiva para filhos
+    If row.ChildRows IsNot Nothing Then
+        For Each child As BOMRow In row.ChildRows
+            AdicionarBOMRowRecursivo(child, sb, indent & "    ") ' Indenta para visualizar hierarquia
+        Next
+    End If
+End Sub
