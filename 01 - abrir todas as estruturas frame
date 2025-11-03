@@ -1,0 +1,80 @@
+Imports System.Windows.Forms
+Imports Inventor
+Imports System.Text
+
+Sub Main()
+    Dim doc As Document = ThisApplication.ActiveDocument
+    If doc.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
+        MessageBox.Show("Execute este script em um documento de montagem (.iam).", "Documento inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+        Return
+    End If
+
+    Dim asmDoc As AssemblyDocument = doc
+    Dim bom As BOM = asmDoc.ComponentDefinition.BOM
+    bom.StructuredViewEnabled = True
+
+    Dim modelDataView As BOMView = Nothing
+    For Each view As BOMView In bom.BOMViews
+        If view.ViewType = BOMViewTypeEnum.kModelDataBOMViewType Then
+            modelDataView = view
+            Exit For
+        End If
+    Next
+
+    If modelDataView Is Nothing Then
+        MessageBox.Show("BOM View do tipo Model Data não encontrada.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        Return
+    End If
+
+    ' Lista para armazenar documentos que começam com "Frame"
+    Dim frameDocs As New List(Of String)()
+
+    ' Percorre todos os níveis do BOM
+    For Each row As BOMRow In modelDataView.BOMRows
+        ColetarFrameDocsRecursivo(row, frameDocs)
+    Next
+
+    ' Se encontrou algum, abre as montagens
+    If frameDocs.Count = 0 Then
+        MessageBox.Show("Nenhuma montagem com Part Number começando com 'Frame' foi encontrada.", "Informação", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    Else
+        For Each filePath As String In frameDocs.Distinct() ' Remove duplicados
+            Try
+                ThisApplication.Documents.Open(filePath, True)
+            Catch ex As Exception
+                MessageBox.Show("Não foi possível abrir o arquivo: " & filePath & vbCrLf & ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
+        Next
+        MessageBox.Show(frameDocs.Count.ToString() & " montagem(ns) abertas.", "Sucesso", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    End If
+End Sub
+
+' Função recursiva para coletar todos os documentos que começam com "Frame"
+Sub ColetarFrameDocsRecursivo(row As BOMRow, frameDocs As List(Of String))
+    Try
+        If row.ComponentDefinitions.Count > 0 Then
+            Dim compDef As ComponentDefinition = row.ComponentDefinitions.Item(1)
+            Dim docPart As Document = compDef.Document
+            Dim partNumber As String = "(sem Part Number)"
+
+            Try
+                partNumber = docPart.PropertySets.Item("Design Tracking Properties").Item("Part Number").Value.ToString()
+            Catch
+            End Try
+
+            ' Verifica se o Part Number começa com "Frame"
+            If partNumber.StartsWith("Frame", StringComparison.InvariantCultureIgnoreCase) Then
+                frameDocs.Add(docPart.FullFileName)
+            End If
+        End If
+
+        ' Percorre recursivamente filhos
+        If row.ChildRows IsNot Nothing Then
+            For Each child As BOMRow In row.ChildRows
+                ColetarFrameDocsRecursivo(child, frameDocs)
+            Next
+        End If
+    Catch
+        ' Ignora erros individuais
+    End Try
+End Sub
