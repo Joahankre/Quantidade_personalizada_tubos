@@ -1,0 +1,437 @@
+Imports System.Windows.Forms
+Imports Inventor
+Imports System.Text
+Imports System.IO
+Imports System.Linq
+
+' ==============================================================
+' iLogic Integrado: Multiplicador Simples + Multiplicador Frame
+' Unificado com um único InputBox e ProgressBar otimizada
+' ==============================================================
+
+Sub Main()
+    ' =========================
+    ' VERIFICA DOCUMENTO
+    ' =========================
+    Dim oDoc As Document = ThisApplication.ActiveDocument
+
+    If oDoc.DocumentType <> kAssemblyDocumentObject Then
+        MessageBox.Show("Esta regra só pode ser executada em um arquivo de montagem - saindo da regra...", "iLogic")
+        Return
+    End If
+
+    ' =========================
+    ' SOLICITA MULTIPLICADOR (UMA ÚNICA VEZ)
+    ' =========================
+    Dim input As String = InputBox("Digite a quantidade de vezes que este projeto será produzido:", "Multiplicador de Projeto", "1")
+    If Not IsNumeric(input) Then
+        MessageBox.Show("Valor inválido. Use apenas números.", "Erro")
+        Return
+    End If
+
+    Dim multiplicador As Integer = CInt(input)
+    If multiplicador < 1 Then
+        MessageBox.Show("O multiplicador deve ser maior ou igual a 1.", "Erro")
+        Return
+    End If
+
+    ' Nome da propriedade personalizada
+    Dim oBOMQTY As String = "QTDE PERSONALIZADA"
+
+    ' =========================
+    ' EXECUTA OS DOIS PROCESSOS
+    ' =========================
+    ExecutarMultiplicadorSimples(oDoc, oBOMQTY, multiplicador)
+    ExecutarMultiplicadorFrame(oDoc, oBOMQTY, multiplicador)
+
+    MessageBox.Show("Processo concluído com sucesso!" & vbCrLf & "Multiplicador aplicado: " & multiplicador, "Concluído", MessageBoxButtons.OK, MessageBoxIcon.Information)
+	GerarRelatorioQtdePersonalizada(oDoc, oBOMQTY)
+
+End Sub
+
+' ==============================================================
+' SCRIPT 1 - MULTIPLICADOR SIMPLES
+' ==============================================================
+
+Sub ExecutarMultiplicadorSimples(oDoc As Document, oBOMQTY As String, multiplicador As Integer)
+    Dim refDocs As DocumentsEnumerator = oDoc.AllReferencedDocuments
+
+    ' Barra de progresso
+    Dim oProgressBar As Inventor.ProgressBar
+    Dim oProgressSteps As Integer = refDocs.Count
+    Dim oProgressStep As Integer = 0
+    Dim oProgressStaticText As String = "Atualizando propriedades: Etapa "
+
+    oProgressBar = ThisApplication.CreateProgressBar(False, oProgressSteps, "Quantidade de Itens e Submontagens")
+    oProgressBar.Message = oProgressStaticText & oProgressStep & " de " & oProgressSteps
+    oProgressBar.UpdateProgress
+
+    Dim assemblyDoc As AssemblyDocument = oDoc
+    Dim assemblyDef As AssemblyComponentDefinition = assemblyDoc.ComponentDefinition
+
+    ' Processa cada documento referenciado
+    For Each docFile As Document In refDocs
+        Try
+            Dim FNamePos As Integer = InStrRev(docFile.FullFileName, "\", -1)
+            Dim docFName As String = Mid(docFile.FullFileName, FNamePos + 1)
+            Dim partQty As Object = assemblyDef.Occurrences.AllReferencedOccurrences(docFile)
+
+            Dim qtdeTotal As Integer = partQty.Count * multiplicador
+
+            Try
+                iProperties.Value(docFName, "Custom", oBOMQTY) = qtdeTotal
+            Catch
+                iProperties.Value(docFName, "Custom", oBOMQTY) = qtdeTotal
+            End Try
+
+        Catch
+            ' Ignora erros
+        End Try
+
+        ' Atualiza progresso
+        oProgressStep += 1
+        oProgressBar.Message = oProgressStaticText & oProgressStep & " de " & oProgressSteps
+        oProgressBar.UpdateProgress
+    Next
+
+    ' Atualiza a própria montagem
+    Try
+        iProperties.Value("Custom", oBOMQTY) = multiplicador
+    Catch
+        iProperties.Value("Custom", oBOMQTY) = multiplicador
+    End Try
+
+    oProgressBar.Close()
+    iLogicVb.UpdateWhenDone = True
+End Sub
+
+' ==============================================================
+' SCRIPT 2 - MULTIPLICADOR FRAME (somente filhos dos frames)
+' ==============================================================
+
+' ==============================================================
+' SCRIPT 2 - MULTIPLICADOR FRAME (corrigido: trata cada frame individualmente)
+' ==============================================================
+
+' ==============================================================
+' SCRIPT 2 - MULTIPLICADOR FRAME (corrigido e individual por frame)
+' ==============================================================
+
+Sub ExecutarMultiplicadorFrame(oDoc As Document, oBOMQTY As String, multiplicadorGlobal As Integer)
+    Dim asmDoc As AssemblyDocument = oDoc
+    Dim bom As BOM = asmDoc.ComponentDefinition.BOM
+    bom.StructuredViewEnabled = True
+
+    Dim modelDataView As BOMView = Nothing
+    For Each view As BOMView In bom.BOMViews
+        If View.ViewType = BOMViewTypeEnum.kModelDataBOMViewType Then
+            modelDataView = View
+            Exit For
+        End If
+    Next
+
+    If modelDataView Is Nothing Then
+        MessageBox.Show("BOM View do tipo Model Data não encontrada.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        Return
+    End If
+
+    ' Coleta todas as montagens "Frame"
+    Dim frameRows As New List(Of BOMRow)
+    For Each row As BOMRow In modelDataView.BOMRows
+        ColetarMontagensFrameRecursivo(Row, frameRows)
+    Next
+
+    If frameRows.Count = 0 Then Return
+
+    ' Barra de progresso
+    Dim oProgressBar As Inventor.ProgressBar
+    Dim oProgressSteps As Integer = frameRows.Count
+    Dim oProgressStep As Integer = 0
+
+    oProgressBar = ThisApplication.CreateProgressBar(False, oProgressSteps, "Atualizando montagens Frame individualmente...")
+    oProgressBar.Message = "Iniciando atualização..."
+    oProgressBar.UpdateProgress
+
+    ' Processa cada Frame separadamente
+    For Each frameRow As BOMRow In frameRows
+        Try
+            Dim compDef As ComponentDefinition = frameRow.ComponentDefinitions.Item(1)
+            Dim frameDoc As Document = compDef.Document
+            Dim frameName As String = frameDoc.DisplayName
+
+            ' =======================================
+            ' 1️⃣  Lê a propriedade personalizada do frame
+            ' =======================================
+            Dim frameMultiplicador As Integer = 1
+            Try
+                Dim customProps As PropertySet = frameDoc.PropertySets.Item("Inventor User Defined Properties")
+                Dim valorProp As Object = customProps.Item(oBOMQTY).Value
+                If IsNumeric(valorProp) Then
+                    frameMultiplicador = CInt(valorProp)
+                End If
+            Catch
+                frameMultiplicador = 1
+            End Try
+
+            ' =======================================
+            ' 2️⃣  Conta os filhos (tubos) do frame
+            ' =======================================
+            Dim partCount As New Dictionary(Of String, Integer)(StringComparer.InvariantCultureIgnoreCase)
+            If frameRow.ChildRows IsNot Nothing Then
+                For Each child As BOMRow In frameRow.ChildRows
+                    ContarPartesPorMassa(child, partCount)
+                Next
+            End If
+
+            ' =======================================
+            ' 3️⃣  Aplica multiplicador do frame × multiplicador global
+            ' =======================================
+            Dim partCountMultiplicado As New Dictionary(Of String, Integer)(StringComparer.InvariantCultureIgnoreCase)
+            For Each kvp As KeyValuePair(Of String, Integer) In partCount
+                Dim qtdeFinal As Integer = kvp.Value * frameMultiplicador * multiplicadorGlobal
+                partCountMultiplicado.Add(kvp.Key, qtdeFinal)
+            Next
+
+            ' =======================================
+            ' 4️⃣  Atualiza as propriedades dos filhos (tubos)
+            ' =======================================
+            AtualizarPropriedadesPersonalizadasFilhos(oBOMQTY, partCountMultiplicado, oProgressBar, oProgressStep, oProgressSteps, frameName)
+
+        Catch ex As Exception
+            ' Ignora erros individuais e continua
+        End Try
+
+        oProgressStep += 1
+        oProgressBar.Message = "Atualizando Frame " & oProgressStep & " de " & oProgressSteps
+        oProgressBar.UpdateProgress
+    Next
+
+    oProgressBar.Close()
+End Sub
+
+
+
+' ==============================================================
+' Atualiza apenas os filhos (tubos) das montagens Frame
+' ==============================================================
+
+Sub AtualizarPropriedadesPersonalizadasFilhos(oBOMQTY As String, dict As Dictionary(Of String, Integer),
+                                              oProgressBar As Inventor.ProgressBar, ByRef oProgressStep As Integer, oProgressSteps As Integer,
+                                              Optional frameName As String = "")
+
+
+    For Each kvp As KeyValuePair(Of String, Integer) In dict
+        Dim keyParts() As String = kvp.Key.Split("|"c)
+        Dim partNumber As String = keyParts(0)
+        Dim massaKey As Double = CDbl(keyParts(1))
+
+        ' Atualiza SOMENTE partes (não montagens Frame)
+        For Each doc As Document In ThisApplication.Documents
+            Try
+                ' Ignorar montagens Frame
+                If doc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then Continue For
+
+                Dim pn As String = ""
+                Try
+                    pn = doc.PropertySets.Item("Design Tracking Properties").Item("Part Number").Value.ToString()
+                Catch
+                End Try
+
+                If pn.Equals(partNumber, StringComparison.InvariantCultureIgnoreCase) Then
+                    Dim massaDoc As Double = 0.0
+                    Try
+                        massaDoc = doc.ComponentDefinition.MassProperties.Mass
+                    Catch
+                    End Try
+
+                    If Math.Abs(massaDoc - massaKey) < 0.00001 Then
+                        Dim customProps As PropertySet = doc.PropertySets.Item("Inventor User Defined Properties")
+                        Try
+                            customProps.Item(oBOMQTY).Value = kvp.Value
+                        Catch
+                            customProps.Add(kvp.Value, oBOMQTY)
+                        End Try
+                        doc.Update()
+                    End If
+                End If
+            Catch
+            End Try
+        Next
+
+        ' Atualiza barra de progresso
+        oProgressStep += 1
+        oProgressBar.Message = "Atualizando filhos de Frames: " & oProgressStep & " de " & oProgressSteps
+        oProgressBar.UpdateProgress
+    Next
+End Sub
+
+
+' ==============================================================
+' Funções auxiliares (mantidas do seu código original)
+' ==============================================================
+
+Sub ColetarMontagensFrameRecursivo(row As BOMRow, lista As List(Of BOMRow))
+    Try
+        If row.ComponentDefinitions.Count > 0 Then
+            Dim compDef As ComponentDefinition = row.ComponentDefinitions.Item(1)
+            Dim doc As Document = compDef.Document
+
+            Dim partNumber As String = ""
+            Try
+                partNumber = doc.PropertySets.Item("Design Tracking Properties").Item("Part Number").Value.ToString()
+            Catch
+            End Try
+
+            If partNumber.StartsWith("Frame", StringComparison.InvariantCultureIgnoreCase) Then
+                lista.Add(row)
+            End If
+
+            If Not partNumber.StartsWith("Skeleton", StringComparison.InvariantCultureIgnoreCase) Then
+                If row.ChildRows IsNot Nothing Then
+                    For Each child As BOMRow In row.ChildRows
+                        ColetarMontagensFrameRecursivo(child, lista)
+                    Next
+                End If
+            End If
+        End If
+    Catch
+    End Try
+End Sub
+
+Sub ContarPartesPorMassa(row As BOMRow, dict As Dictionary(Of String, Integer))
+    Try
+        If row.ComponentDefinitions.Count > 0 Then
+            Dim compDef As ComponentDefinition = row.ComponentDefinitions.Item(1)
+            Dim doc As Document = compDef.Document
+
+            Dim partNumber As String = "(sem PN)"
+            Dim massa As Double = 0.0
+
+            Try
+                partNumber = doc.PropertySets.Item("Design Tracking Properties").Item("Part Number").Value.ToString()
+            Catch
+            End Try
+
+            Try
+                massa = doc.ComponentDefinition.MassProperties.Mass
+            Catch
+            End Try
+
+            Dim key As String = partNumber & "|" & Math.Round(massa, 5).ToString()
+
+            If dict.ContainsKey(key) Then
+                dict(key) += 1
+            Else
+                dict.Add(key, 1)
+            End If
+        End If
+
+        If row.ChildRows IsNot Nothing Then
+            For Each child As BOMRow In row.ChildRows
+                ContarPartesPorMassa(child, dict)
+            Next
+        End If
+    Catch
+    End Try
+End Sub
+
+Sub AtualizarPropriedadesPersonalizadas(oBOMQTY As String, dict As Dictionary(Of String, Integer),
+                                        oProgressBar As Inventor.ProgressBar, ByRef oProgressStep As Integer, oProgressSteps As Integer)
+    For Each kvp As KeyValuePair(Of String, Integer) In dict
+        Dim keyParts() As String = kvp.Key.Split("|"c)
+        Dim partNumber As String = keyParts(0)
+        Dim massaKey As Double = CDbl(keyParts(1))
+
+        For Each doc As Document In ThisApplication.Documents
+            Try
+                Dim pn As String = ""
+                Try
+                    pn = doc.PropertySets.Item("Design Tracking Properties").Item("Part Number").Value.ToString()
+                Catch
+                End Try
+
+                If pn.Equals(partNumber, StringComparison.InvariantCultureIgnoreCase) Then
+                    Dim massaDoc As Double = 0.0
+                    Try
+                        massaDoc = doc.ComponentDefinition.MassProperties.Mass
+                    Catch
+                    End Try
+
+                    If Math.Abs(massaDoc - massaKey) < 0.00001 Then
+                        Dim customProps As PropertySet = doc.PropertySets.Item("Inventor User Defined Properties")
+                        Try
+                            customProps.Item(oBOMQTY).Value = kvp.Value
+                        Catch
+                            customProps.Add(kvp.Value, oBOMQTY)
+                        End Try
+                        doc.Update()
+                    End If
+                End If
+            Catch
+            End Try
+        Next
+
+        ' Atualiza barra de progresso
+        oProgressStep += 1
+        oProgressBar.Message = "Atualizando montagens Frame: " & oProgressStep & " de " & oProgressSteps
+        oProgressBar.UpdateProgress
+    Next
+End Sub
+
+' ==============================================================
+' GERA RELATÓRIO DE QTDE PERSONALIZADA
+' ==============================================================
+
+Sub GerarRelatorioQtdePersonalizada(oDoc As Document, oBOMQTY As String)
+    Try
+        Dim sb As New StringBuilder()
+        sb.AppendLine("===================================================")
+        sb.AppendLine("RELATÓRIO DE QTDE PERSONALIZADA - " & Now.ToString("dd/MM/yyyy HH:mm:ss"))
+        sb.AppendLine("Montagem: " & oDoc.DisplayName)
+        sb.AppendLine("===================================================")
+        sb.AppendLine("")
+        sb.AppendLine(String.Format("{0,-50}{1,15}", "ARQUIVO / PART NUMBER", "QTDE PERSONALIZADA"))
+        sb.AppendLine(String.Format("{0,-50}{1,15}", "----------------------------------------------", "------------------"))
+
+        ' Percorre todos os documentos abertos e lista os que têm a propriedade personalizada
+        For Each doc As Document In ThisApplication.Documents
+            Try
+                Dim customProps As PropertySet = doc.PropertySets.Item("Inventor User Defined Properties")
+                Dim valor As Object = Nothing
+
+                Try
+                    valor = customProps.Item(oBOMQTY).Value
+                Catch
+                    valor = Nothing
+                End Try
+
+                If valor IsNot Nothing Then
+                    Dim pn As String = ""
+                    Try
+                        pn = doc.PropertySets.Item("Design Tracking Properties").Item("Part Number").Value.ToString()
+                    Catch
+                        pn = "(sem PN)"
+                    End Try
+
+                    Dim linha As String = String.Format("{0,-50}{1,15}", pn, valor.ToString())
+                    sb.AppendLine(linha)
+                End If
+            Catch
+            End Try
+        Next
+
+        sb.AppendLine("")
+        sb.AppendLine("===================================================")
+
+        ' Caminho do relatório
+        Dim pastaRelatorio As String = System.IO.Path.GetDirectoryName(oDoc.FullFileName)
+        Dim arquivoRelatorio As String = System.IO.Path.Combine(pastaRelatorio, "Relatorio_QTDE_PERSONALIZADA.txt")
+
+        System.IO.File.WriteAllText(arquivoRelatorio, sb.ToString(), Encoding.UTF8)
+
+        MessageBox.Show("Relatório gerado com sucesso!" & vbCrLf & arquivoRelatorio, "Relatório", MessageBoxButtons.OK, MessageBoxIcon.Information)
+
+    Catch ex As Exception
+        MessageBox.Show("Erro ao gerar relatório: " & ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error)
+    End Try
+End Sub
