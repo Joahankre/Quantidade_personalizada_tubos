@@ -1,0 +1,539 @@
+Imports Inventor
+Imports System.Windows.Forms
+Imports System.IO
+Imports System.Collections.Generic
+
+
+Public Class ThisRule
+
+    Sub Main()
+
+        Dim etapa As String = "INICIALIZACAO"
+
+        Dim pastaTemporaria As String = ""
+        Dim pastaResultado As String = ""
+
+        Try
+
+            ' ==================================================
+            ' 1 - VERIFICAR DOCUMENTO ATIVO
+            ' ==================================================
+
+            Dim asmDoc As AssemblyDocument =
+                TryCast(ThisApplication.ActiveDocument, AssemblyDocument)
+
+            If asmDoc Is Nothing Then
+
+                MessageBox.Show(
+                    "Abra uma montagem IAM antes de executar.",
+                    "Comparacao")
+
+                Return
+
+            End If
+
+            If String.IsNullOrWhiteSpace(asmDoc.FullFileName) Then
+
+                Throw New Exception(
+                    "Salve a montagem antes de executar a regra.")
+
+            End If
+
+            ' ==================================================
+            ' 2 - SELECIONAR PRIMEIRA PECA
+            ' ==================================================
+
+            etapa = "SELECAO DA PRIMEIRA PECA"
+
+            Dim selecao1 As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a PRIMEIRA peça")
+
+            If selecao1 Is Nothing Then Return
+
+            ' ==================================================
+            ' 3 - SELECIONAR SEGUNDA PECA
+            ' ==================================================
+
+            etapa = "SELECAO DA SEGUNDA PECA"
+
+            Dim selecao2 As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a SEGUNDA peça")
+
+            If selecao2 Is Nothing Then Return
+
+            ' ==================================================
+            ' 4 - IDENTIFICAR ARQUIVOS ORIGINAIS
+            ' ==================================================
+
+            etapa = "IDENTIFICACAO DOS ARQUIVOS"
+
+            Dim documento1 As Document =
+                TryCast(selecao1.Definition.Document, Document)
+
+            Dim documento2 As Document =
+                TryCast(selecao2.Definition.Document, Document)
+
+            If documento1 Is Nothing OrElse documento2 Is Nothing Then
+
+                Throw New Exception(
+                    "Nao foi possivel identificar os documentos.")
+
+            End If
+
+            If documento1.DocumentType <>
+                DocumentTypeEnum.kPartDocumentObject OrElse
+                documento2.DocumentType <>
+                DocumentTypeEnum.kPartDocumentObject Then
+
+                Throw New Exception(
+                    "Selecione duas pecas IPT.")
+
+            End If
+
+            Dim original1 As String = documento1.FullFileName
+            Dim original2 As String = documento2.FullFileName
+
+            If Not System.IO.File.Exists(original1) OrElse
+               Not System.IO.File.Exists(original2) Then
+
+                Throw New Exception(
+                    "Um dos arquivos originais nao foi encontrado.")
+
+            End If
+
+            If String.Equals(
+                original1,
+                original2,
+                StringComparison.OrdinalIgnoreCase) Then
+
+                Throw New Exception(
+                    "As duas selecoes correspondem ao mesmo arquivo.")
+
+            End If
+
+            ' ==================================================
+            ' 5 - CRIAR PASTA TEMPORARIA
+            ' ==================================================
+
+            etapa = "CRIACAO DAS COPIAS DE TRABALHO"
+
+            Dim identificador As String =
+                System.DateTime.Now.ToString("yyyyMMdd_HHmmss") &
+                "_" &
+                System.Guid.NewGuid().ToString("N").Substring(0, 6)
+
+            pastaTemporaria =
+                System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(),
+                    "INVENTOR_COMPARACAO_" & identificador)
+
+            System.IO.Directory.CreateDirectory(
+                pastaTemporaria)
+
+            ' ==================================================
+            ' 6 - CRIAR PASTA DE RESULTADOS
+            ' ==================================================
+
+            etapa = "CRIACAO DA PASTA DE RESULTADOS"
+
+            pastaResultado =
+                System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(
+                        asmDoc.FullFileName),
+                    "RESULTADOS_COMPARACAO_" & identificador)
+
+            System.IO.Directory.CreateDirectory(
+                pastaResultado)
+
+            ' ==================================================
+            ' 7 - COPIAR ARQUIVOS ORIGINAIS
+            ' ==================================================
+
+            etapa = "COPIA FISICA DOS ARQUIVOS"
+
+            Dim copia1 As String =
+                System.IO.Path.Combine(
+                    pastaTemporaria,
+                    "PECA_1.ipt")
+
+            Dim copia2 As String =
+                System.IO.Path.Combine(
+                    pastaTemporaria,
+                    "PECA_2.ipt")
+
+            ' IMPORTANTE:
+            ' Somente leitura dos originais.
+            ' File.Copy nao altera o arquivo de origem.
+
+            System.IO.File.Copy(
+                original1,
+                copia1,
+                False)
+
+            System.IO.File.Copy(
+                original2,
+                copia2,
+                False)
+
+            ' ==================================================
+            ' 8 - DEFINIR RESULTADOS
+            ' ==================================================
+
+            Dim nome1 As String =
+                System.IO.Path.GetFileNameWithoutExtension(original1)
+
+            Dim nome2 As String =
+                System.IO.Path.GetFileNameWithoutExtension(original2)
+
+            Dim resultado1 As String =
+                System.IO.Path.Combine(
+                    pastaResultado,
+                    nome1 & "_DIFERENCA_VERDE.ipt")
+
+            Dim resultado2 As String =
+                System.IO.Path.Combine(
+                    pastaResultado,
+                    nome2 & "_DIFERENCA_VERMELHA.ipt")
+
+            ' ==================================================
+            ' 9 - COMPARAR PRIMEIRA PECA CONTRA SEGUNDA
+            ' ==================================================
+
+            etapa = "DIFERENCA PRIMEIRA PECA"
+
+            CriarDiferencaSegura(
+                copia1,
+                copia2,
+                resultado1,
+                "Green")
+
+            ' ==================================================
+            ' 10 - COMPARAR SEGUNDA PECA CONTRA PRIMEIRA
+            ' ==================================================
+
+            etapa = "DIFERENCA SEGUNDA PECA"
+
+            CriarDiferencaSegura(
+                copia2,
+                copia1,
+                resultado2,
+                "Smooth - Red")
+
+            ' ==================================================
+            ' 11 - ABRIR RESULTADOS
+            ' ==================================================
+
+            etapa = "ABERTURA DOS RESULTADOS"
+
+            ThisApplication.Documents.Open(
+                resultado1,
+                True)
+
+            ThisApplication.Documents.Open(
+                resultado2,
+                True)
+
+            ThisApplication.ActiveView.Update()
+
+            ' ==================================================
+            ' 12 - LIMPAR COPIAS TEMPORARIAS
+            ' ==================================================
+
+            etapa = "LIMPEZA TEMPORARIA"
+
+            Try
+
+                System.IO.Directory.Delete(
+                    pastaTemporaria,
+                    True)
+
+                pastaTemporaria = ""
+
+            Catch
+
+                ' Se o Inventor mantiver algum arquivo temporario
+                ' bloqueado, preservar a pasta para nao interromper
+                ' a entrega dos resultados.
+
+            End Try
+
+            ' ==================================================
+            ' 13 - MENSAGEM FINAL
+            ' ==================================================
+
+            MessageBox.Show(
+                "COMPARACAO CONCLUIDA!" &
+                vbCrLf & vbCrLf &
+                "Primeira peca:" &
+                vbCrLf & nome1 &
+                vbCrLf & vbCrLf &
+                "Segunda peca:" &
+                vbCrLf & nome2 &
+                vbCrLf & vbCrLf &
+                "RESULTADOS:" &
+                vbCrLf & pastaResultado &
+                vbCrLf & vbCrLf &
+                "ARQUIVOS ORIGINAIS:" &
+                vbCrLf & "NAO FORAM SALVOS OU MODIFICADOS PELA REGRA.",
+                "Comparacao concluida",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information)
+
+        Catch ex As Exception
+
+            MessageBox.Show(
+                "ERRO DURANTE A COMPARACAO" &
+                vbCrLf & vbCrLf &
+                "ETAPA: " & etapa &
+                vbCrLf & vbCrLf &
+                ex.Message &
+                vbCrLf & vbCrLf &
+                "Os arquivos originais nao sao gravados por esta regra.",
+                "Erro de comparacao",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error)
+
+        End Try
+
+    End Sub
+
+
+    ' ==========================================================
+    ' COMPARACAO SEGURA
+    ' ==========================================================
+
+    Private Sub CriarDiferencaSegura(
+        arquivoBase As String,
+        arquivoFerramenta As String,
+        arquivoResultado As String,
+        nomeAparencia As String)
+
+        Dim doc As PartDocument = Nothing
+
+        Try
+
+            ' --------------------------------------------------
+            ' 1 - CRIAR COPIA INDEPENDENTE DO ARQUIVO BASE
+            ' --------------------------------------------------
+
+            If System.IO.File.Exists(arquivoResultado) Then
+
+                Throw New Exception(
+                    "O arquivo de resultado ja existe.")
+
+            End If
+
+            System.IO.File.Copy(
+                arquivoBase,
+                arquivoResultado,
+                False)
+
+            ' --------------------------------------------------
+            ' 2 - ABRIR SOMENTE A COPIA DE RESULTADO
+            ' --------------------------------------------------
+
+            doc = CType(
+                ThisApplication.Documents.Open(
+                    arquivoResultado,
+                    False),
+                PartDocument)
+
+            ' --------------------------------------------------
+            ' 3 - DERIVAR A OUTRA COPIA
+            ' --------------------------------------------------
+
+            Dim componentesDerivados As DerivedPartComponents =
+                doc.ComponentDefinition.ReferenceComponents.
+                DerivedPartComponents
+
+            Dim definicao As DerivedPartUniformScaleDef =
+                componentesDerivados.CreateUniformScaleDef(
+                    arquivoFerramenta)
+
+            definicao.BodyAsSolidBody = False
+
+            Dim derivacao As DerivedPartComponent =
+                componentesDerivados.Add(definicao)
+
+            ' --------------------------------------------------
+            ' 4 - ROMPER VINCULO DA DERIVACAO
+            ' --------------------------------------------------
+
+            derivacao.BreakLinkToFile()
+
+            ' --------------------------------------------------
+            ' 5 - IDENTIFICAR SUPERFICIE DE RECORTE
+            ' --------------------------------------------------
+
+            If doc.ComponentDefinition.WorkSurfaces.Count = 0 Then
+
+                Throw New Exception(
+                    "A derivacao nao criou uma superficie de trabalho.")
+
+            End If
+
+            Dim ferramenta As SurfaceBody =
+                doc.ComponentDefinition.WorkSurfaces.Item(1)._SurfaceBody
+
+            ferramenta.Visible = False
+
+            ' --------------------------------------------------
+            ' 6 - IDENTIFICAR CORPO ORIGINAL DA COPIA
+            ' --------------------------------------------------
+
+            If doc.ComponentDefinition.SurfaceBodies.Count = 0 Then
+
+                Throw New Exception(
+                    "Nenhum corpo solido foi encontrado.")
+
+            End If
+
+            Dim corpo As SurfaceBody =
+                doc.ComponentDefinition.SurfaceBodies.Item(1)
+
+            ' --------------------------------------------------
+            ' 7 - EXECUTAR RECORTE
+            ' --------------------------------------------------
+
+            Try
+
+                doc.ComponentDefinition.Features.
+                    SplitFeatures.TrimSolid(
+                        ferramenta,
+                        corpo,
+                        False)
+
+            Catch
+
+                Try
+
+                    doc.ComponentDefinition.Features.
+                        SplitFeatures.TrimSolid(
+                            ferramenta,
+                            corpo,
+                            True)
+
+                Catch ex As Exception
+
+                    Throw New Exception(
+                        "Falha na operacao TrimSolid: " &
+                        ex.Message)
+
+                End Try
+
+            End Try
+
+            ' --------------------------------------------------
+            ' 8 - APLICAR APARENCIA
+            ' --------------------------------------------------
+
+            AplicarAparencia(
+                doc,
+                nomeAparencia)
+
+            ' --------------------------------------------------
+            ' 9 - ATUALIZAR DOCUMENTO
+            ' --------------------------------------------------
+
+            doc.Update()
+
+            ' --------------------------------------------------
+            ' 10 - SALVAR SOMENTE O RESULTADO
+            ' --------------------------------------------------
+
+            doc.Save()
+
+            doc.Close(True)
+
+            doc = Nothing
+
+        Catch ex As Exception
+
+            If doc IsNot Nothing Then
+
+                Try
+                    doc.Close(False)
+                Catch
+                End Try
+
+                doc = Nothing
+
+            End If
+
+            Throw New Exception(
+                "Falha ao criar diferenca." &
+                vbCrLf &
+                "Base: " & arquivoBase &
+                vbCrLf &
+                "Ferramenta: " & arquivoFerramenta &
+                vbCrLf &
+                "Resultado: " & arquivoResultado &
+                vbCrLf &
+                "Detalhe: " & ex.Message)
+
+        End Try
+
+    End Sub
+
+
+    ' ==========================================================
+    ' APLICAR APARENCIA
+    ' ==========================================================
+
+    Private Sub AplicarAparencia(
+        doc As PartDocument,
+        nomeAparencia As String)
+
+        Try
+
+            Dim aparenciaEncontrada As Asset = Nothing
+
+            For Each asset As Asset In doc.Assets
+
+                If String.Equals(
+                    Asset.Name,
+                    nomeAparencia,
+                    StringComparison.OrdinalIgnoreCase) OrElse
+                   String.Equals(
+                    Asset.DisplayName,
+                    nomeAparencia,
+                    StringComparison.OrdinalIgnoreCase) Then
+
+                    aparenciaEncontrada = Asset
+                    Exit For
+
+                End If
+
+            Next
+
+            If aparenciaEncontrada Is Nothing Then
+
+                Exit Sub
+
+            End If
+
+            For Each corpo As SurfaceBody In
+                doc.ComponentDefinition.SurfaceBodies
+
+                If corpo.IsSolid Then
+
+                    corpo.Appearance = aparenciaEncontrada
+
+                End If
+
+            Next
+
+        Catch
+
+            ' A falha de aparencia nao deve comprometer
+            ' os arquivos originais nem interromper a comparacao.
+
+        End Try
+
+    End Sub
+
+End Class
