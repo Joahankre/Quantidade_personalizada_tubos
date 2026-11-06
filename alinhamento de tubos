@@ -1,0 +1,323 @@
+Imports Inventor
+Imports System.Windows.Forms
+Imports System.IO
+
+
+Public Class ThisRule
+
+    Sub Main()
+
+        Dim etapa As String = "INICIALIZACAO"
+
+        Try
+
+            ' ==============================================
+            ' 1 - VERIFICAR MONTAGEM
+            ' ==============================================
+
+            Dim asmDoc As AssemblyDocument =
+                TryCast(ThisApplication.ActiveDocument, AssemblyDocument)
+
+            If asmDoc Is Nothing Then
+                MessageBox.Show("Abra uma montagem IAM.")
+                Return
+            End If
+
+            ' ==============================================
+            ' 2 - SELECIONAR PECAS
+            ' ==============================================
+
+            etapa = "SELECAO DA PRIMEIRA PECA"
+
+            Dim selecao1 As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a PRIMEIRA peça")
+
+            If selecao1 Is Nothing Then Return
+
+            etapa = "SELECAO DA SEGUNDA PECA"
+
+            Dim selecao2 As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a SEGUNDA peça")
+
+            If selecao2 Is Nothing Then Return
+
+            ' ==============================================
+            ' 3 - IDENTIFICAR DOCUMENTOS
+            ' ==============================================
+
+            etapa = "IDENTIFICACAO DOS DOCUMENTOS"
+
+            Dim doc1 As PartDocument =
+                TryCast(selecao1.Definition.Document, PartDocument)
+
+            Dim doc2 As PartDocument =
+                TryCast(selecao2.Definition.Document, PartDocument)
+
+            If doc1 Is Nothing OrElse doc2 Is Nothing Then
+                Throw New Exception("Selecione dois arquivos IPT.")
+            End If
+
+            Dim nome1 As String = doc1.DisplayName
+            Dim nome2 As String = doc2.DisplayName
+
+            ' ==============================================
+            ' 4 - VERIFICAR MESMO ARQUIVO
+            ' ==============================================
+
+            If String.Equals(
+                doc1.FullFileName,
+                doc2.FullFileName,
+                StringComparison.OrdinalIgnoreCase) Then
+
+                MessageBox.Show(
+                    "MESMO ARQUIVO IPT." & vbCrLf & vbCrLf &
+                    "As duas ocorrências apontam para o mesmo documento.",
+                    "Resultado")
+
+                Return
+
+            End If
+
+            ' ==============================================
+            ' 5 - IDENTIFICAR CORPOS SOLIDOS
+            ' ==============================================
+
+            etapa = "IDENTIFICACAO DOS CORPOS"
+
+            Dim corpo1 As SurfaceBody = Nothing
+            Dim corpo2 As SurfaceBody = Nothing
+
+            Dim qtd1 As Integer = 0
+            Dim qtd2 As Integer = 0
+
+            For Each body As SurfaceBody In
+                doc1.ComponentDefinition.SurfaceBodies
+
+                If body.IsSolid Then
+                    qtd1 += 1
+                    corpo1 = body
+                End If
+
+            Next
+
+            For Each body As SurfaceBody In
+                doc2.ComponentDefinition.SurfaceBodies
+
+                If body.IsSolid Then
+                    qtd2 += 1
+                    corpo2 = body
+                End If
+
+            Next
+
+            If qtd1 <> 1 OrElse qtd2 <> 1 Then
+
+                Throw New Exception(
+                    "O teste exige exatamente um corpo sólido em cada IPT." &
+                    vbCrLf & vbCrLf &
+                    "Peça 1: " & qtd1 &
+                    vbCrLf &
+                    "Peça 2: " & qtd2)
+
+            End If
+
+            ' ==============================================
+            ' 6 - CONFIGURAR TRANSIENT BREP
+            ' ==============================================
+
+            etapa = "PREPARACAO DOS CORPOS TEMPORARIOS"
+
+            Dim tb As TransientBRep =
+                ThisApplication.TransientBRep
+
+            ' Criar quatro copias independentes
+
+            Dim diferencaA As SurfaceBody =
+                tb.Copy(corpo1)
+
+            Dim ferramentaB As SurfaceBody =
+                tb.Copy(corpo2)
+
+            Dim diferencaB As SurfaceBody =
+                tb.Copy(corpo2)
+
+            Dim ferramentaA As SurfaceBody =
+                tb.Copy(corpo1)
+
+            ' ==============================================
+            ' 7 - VOLUMES ORIGINAIS
+            ' ==============================================
+
+            etapa = "CALCULO DOS VOLUMES ORIGINAIS"
+
+            Dim precisaoVolume As Double = 0.0001
+
+            Dim volume1 As Double =
+                corpo1.Volume(precisaoVolume)
+
+            Dim volume2 As Double =
+                corpo2.Volume(precisaoVolume)
+
+            ' Tolerancia absoluta em cm3
+            Dim toleranciaVolume As Double = 0.000001
+
+            ' ==============================================
+            ' 8 - DIFERENCA A MENOS B
+            ' ==============================================
+
+            etapa = "DIFERENCA A MENOS B"
+
+            tb.DoBoolean(
+                diferencaA,
+                ferramentaB,
+                BooleanTypeEnum.kBooleanTypeDifference)
+
+            Dim volumeAmenosB As Double =
+                diferencaA.Volume(precisaoVolume)
+
+            ' ==============================================
+            ' 9 - DIFERENCA B MENOS A
+            ' ==============================================
+
+            etapa = "DIFERENCA B MENOS A"
+
+            tb.DoBoolean(
+                diferencaB,
+                ferramentaA,
+                BooleanTypeEnum.kBooleanTypeDifference)
+
+            Dim volumeBmenosA As Double =
+                diferencaB.Volume(precisaoVolume)
+
+            ' ==============================================
+            ' 10 - CLASSIFICACAO
+            ' ==============================================
+
+            etapa = "CLASSIFICACAO"
+
+            Dim resultado As String = ""
+            Dim detalhe As String = ""
+
+            Dim igualA As Boolean =
+                volumeAmenosB <= toleranciaVolume
+
+            Dim igualB As Boolean =
+                volumeBmenosA <= toleranciaVolume
+
+            If igualA AndAlso igualB Then
+
+                resultado = "GEOMETRIAS IGUAIS"
+
+                detalhe =
+                    "Nenhum volume significativo foi encontrado " &
+                    "nas duas diferencas."
+
+            ElseIf Not igualA AndAlso Not igualB Then
+
+                resultado = "GEOMETRIAS DIFERENTES"
+
+                detalhe =
+                    "As duas pecas possuem geometria exclusiva."
+
+            ElseIf Not igualA AndAlso igualB Then
+
+                resultado = "GEOMETRIAS DIFERENTES"
+
+                detalhe =
+                    "A primeira peca possui material excedente."
+
+            Else
+
+                resultado = "GEOMETRIAS DIFERENTES"
+
+                detalhe =
+                    "A segunda peca possui material excedente."
+
+            End If
+
+            ' ==============================================
+            ' 11 - APRESENTAR RESULTADOS
+            ' ==============================================
+
+            Dim relatorio As String = ""
+
+            relatorio &=
+                "COMPARACAO GEOMETRICA - INVENTOR 2020" &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "PECA A: " & nome1 &
+                vbCrLf
+
+            relatorio &=
+                "PECA B: " & nome2 &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "VOLUMES ORIGINAIS (cm3)" &
+                vbCrLf
+
+            relatorio &=
+                "A: " & volume1.ToString("F8") &
+                vbCrLf
+
+            relatorio &=
+                "B: " & volume2.ToString("F8") &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "DIFERENCAS BOOLEANAS (cm3)" &
+                vbCrLf
+
+            relatorio &=
+                "A - B: " &
+                volumeAmenosB.ToString("F8") &
+                vbCrLf
+
+            relatorio &=
+                "B - A: " &
+                volumeBmenosA.ToString("F8") &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "TOLERANCIA: " &
+                toleranciaVolume.ToString("F8") &
+                " cm3" &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "RESULTADO:" &
+                vbCrLf &
+                resultado &
+                vbCrLf & vbCrLf &
+                detalhe
+
+            MessageBox.Show(
+                relatorio,
+                "Teste de geometria",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information)
+
+        Catch ex As Exception
+
+            MessageBox.Show(
+                "ERRO DURANTE O TESTE" &
+                vbCrLf & vbCrLf &
+                "ETAPA: " & etapa &
+                vbCrLf & vbCrLf &
+                ex.Message &
+                vbCrLf & vbCrLf &
+                "Nenhum arquivo original foi alterado.",
+                "Erro",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error)
+
+        End Try
+
+    End Sub
+
+End Class
