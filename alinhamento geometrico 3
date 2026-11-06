@@ -1,0 +1,470 @@
+Imports Inventor
+Imports System.Windows.Forms
+Imports System.Globalization
+
+
+Public Class ThisRule
+
+    Sub Main()
+
+        Dim etapa As String = "INICIALIZACAO"
+
+        Try
+
+            ' ==================================================
+            ' ETAPA 1 - SELECAO E PREPARACAO
+            ' ==================================================
+
+            etapa = "ETAPA 1 - SELECAO"
+
+            Dim asm As AssemblyDocument =
+                TryCast(ThisApplication.ActiveDocument, AssemblyDocument)
+
+            If asm Is Nothing Then
+                MessageBox.Show("Abra uma montagem IAM.")
+                Return
+            End If
+
+            Dim selA As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a primeira peça")
+
+            If selA Is Nothing Then Return
+
+            Dim selB As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a segunda peça")
+
+            If selB Is Nothing Then Return
+
+            Dim docA As PartDocument =
+                TryCast(selA.Definition.Document, PartDocument)
+
+            Dim docB As PartDocument =
+                TryCast(selB.Definition.Document, PartDocument)
+
+            If docA Is Nothing OrElse docB Is Nothing Then
+                Throw New Exception("Selecione dois arquivos IPT.")
+            End If
+
+            If String.Equals(
+                docA.FullFileName,
+                docB.FullFileName,
+                StringComparison.OrdinalIgnoreCase) Then
+
+                MessageBox.Show("As duas seleções são o mesmo arquivo.")
+                Return
+
+            End If
+
+            Dim corpoA As SurfaceBody = Nothing
+            Dim corpoB As SurfaceBody = Nothing
+
+            Dim qtdA As Integer = 0
+            Dim qtdB As Integer = 0
+
+            For Each body As SurfaceBody In
+                docA.ComponentDefinition.SurfaceBodies
+
+                If body.IsSolid Then
+                    qtdA += 1
+                    corpoA = body
+                End If
+
+            Next
+
+            For Each body As SurfaceBody In
+                docB.ComponentDefinition.SurfaceBodies
+
+                If body.IsSolid Then
+                    qtdB += 1
+                    corpoB = body
+                End If
+
+            Next
+
+            If qtdA <> 1 OrElse qtdB <> 1 Then
+
+                Throw New Exception(
+                    "Cada IPT precisa possuir exatamente um corpo sólido." &
+                    vbCrLf &
+                    "Corpos A: " & qtdA &
+                    vbCrLf &
+                    "Corpos B: " & qtdB)
+
+            End If
+
+            Dim tb As TransientBRep =
+                ThisApplication.TransientBRep
+
+            Dim tg As TransientGeometry =
+                ThisApplication.TransientGeometry
+
+            Dim precisao As Double = 0.0001
+
+            ' Tolerancia de volume em cm3
+            Dim tolerancia As Double = 0.0001
+
+            Dim volumeOriginalA As Double =
+                corpoA.Volume(precisao)
+
+            Dim volumeOriginalB As Double =
+                corpoB.Volume(precisao)
+
+            ' Centro da caixa envolvente A
+
+            Dim boxA As Box = corpoA.RangeBox
+
+            Dim centroA As Point =
+                tg.CreatePoint(
+                    (boxA.MinPoint.X + boxA.MaxPoint.X) / 2,
+                    (boxA.MinPoint.Y + boxA.MaxPoint.Y) / 2,
+                    (boxA.MinPoint.Z + boxA.MaxPoint.Z) / 2)
+
+            ' Centro da caixa envolvente B
+
+            Dim boxB As Box = corpoB.RangeBox
+
+            Dim centroB As Point =
+                tg.CreatePoint(
+                    (boxB.MinPoint.X + boxB.MaxPoint.X) / 2,
+                    (boxB.MinPoint.Y + boxB.MaxPoint.Y) / 2,
+                    (boxB.MinPoint.Z + boxB.MaxPoint.Z) / 2)
+
+            ' ==================================================
+            ' ETAPA 2 - ALINHAMENTO E TESTES
+            ' ==================================================
+
+            etapa = "ETAPA 2 - ALINHAMENTO"
+
+            Dim melhorResultado As Double =
+                Double.MaxValue
+
+            Dim melhorAB As Double = 0
+            Dim melhorBA As Double = 0
+
+            Dim melhorX As Integer = 0
+            Dim melhorY As Integer = 0
+            Dim melhorZ As Integer = 0
+
+            Dim testesValidos As Integer = 0
+            Dim testesExecutados As Integer = 0
+
+            Dim angulos() As Double = {
+                0,
+                Math.PI / 2,
+                Math.PI,
+                3 * Math.PI / 2
+            }
+
+            Dim eixos() As Vector = {
+                tg.CreateVector(1, 0, 0),
+                tg.CreateVector(0, 1, 0),
+                tg.CreateVector(0, 0, 1)
+            }
+
+            For ix As Integer = 0 To 3
+
+                For iy As Integer = 0 To 3
+
+                    For iz As Integer = 0 To 3
+
+                        testesExecutados += 1
+
+                        Try
+
+                            ' Copia independente da peça B
+
+                            Dim alinhadoB As SurfaceBody =
+                                tb.Copy(corpoB)
+
+                            ' Rotacao X
+
+                            If ix > 0 Then
+
+                                Dim mx As Matrix =
+                                    tg.CreateMatrix()
+
+                                mx.SetToRotation(
+                                    angulos(ix),
+                                    eixos(0),
+                                    centroB)
+
+                                tb.Transform(alinhadoB, mx)
+
+                            End If
+
+                            ' Rotacao Y
+
+                            If iy > 0 Then
+
+                                Dim my As Matrix =
+                                    tg.CreateMatrix()
+
+                                my.SetToRotation(
+                                    angulos(iy),
+                                    eixos(1),
+                                    centroB)
+
+                                tb.Transform(alinhadoB, my)
+
+                            End If
+
+                            ' Rotacao Z
+
+                            If iz > 0 Then
+
+                                Dim mz As Matrix =
+                                    tg.CreateMatrix()
+
+                                mz.SetToRotation(
+                                    angulos(iz),
+                                    eixos(2),
+                                    centroB)
+
+                                tb.Transform(alinhadoB, mz)
+
+                            End If
+
+                            ' Centralizar B no centro de A
+
+                            Dim deslocamento As Vector =
+                                tg.CreateVector(
+                                    centroA.X - centroB.X,
+                                    centroA.Y - centroB.Y,
+                                    centroA.Z - centroB.Z)
+
+                            Dim mt As Matrix =
+                                tg.CreateMatrix()
+
+                            mt.SetTranslation(deslocamento)
+
+                            tb.Transform(alinhadoB, mt)
+
+                            ' ==================================
+                            ' DIFERENCA A - B
+                            ' ==================================
+
+                            Dim diferencaAB As SurfaceBody =
+                                tb.Copy(corpoA)
+
+                            Dim ferramentaB As SurfaceBody =
+                                tb.Copy(alinhadoB)
+
+                            tb.DoBoolean(
+                                diferencaAB,
+                                ferramentaB,
+                                BooleanTypeEnum.kBooleanTypeDifference)
+
+                            Dim volumeAB As Double =
+                                diferencaAB.Volume(precisao)
+
+                            ' ==================================
+                            ' DIFERENCA B - A
+                            ' ==================================
+
+                            Dim diferencaBA As SurfaceBody =
+                                tb.Copy(alinhadoB)
+
+                            Dim ferramentaA As SurfaceBody =
+                                tb.Copy(corpoA)
+
+                            tb.DoBoolean(
+                                diferencaBA,
+                                ferramentaA,
+                                BooleanTypeEnum.kBooleanTypeDifference)
+
+                            Dim volumeBA As Double =
+                                diferencaBA.Volume(precisao)
+
+                            testesValidos += 1
+
+                            ' ==================================
+                            ' GUARDAR MELHOR ALINHAMENTO
+                            ' ==================================
+
+                            Dim residual As Double =
+                                volumeAB + volumeBA
+
+                            If residual < melhorResultado Then
+
+                                melhorResultado = residual
+
+                                melhorAB = volumeAB
+                                melhorBA = volumeBA
+
+                                melhorX = ix * 90
+                                melhorY = iy * 90
+                                melhorZ = iz * 90
+
+                            End If
+
+                        Catch
+
+                            ' Uma combinacao que falhar
+                            ' nao interrompe os demais testes.
+
+                        End Try
+
+                    Next
+
+                Next
+
+            Next
+
+            ' ==================================================
+            ' ETAPA 3 - CLASSIFICACAO E RELATORIO
+            ' ==================================================
+
+            etapa = "ETAPA 3 - CLASSIFICACAO"
+
+            Dim classificacao As String = ""
+            Dim observacao As String = ""
+
+            If testesValidos = 0 Then
+
+                classificacao = "INCONCLUSIVO"
+
+                observacao =
+                    "Nenhuma combinacao conseguiu concluir " &
+                    "as duas operacoes booleanas."
+
+            ElseIf melhorAB <= tolerancia AndAlso
+                   melhorBA <= tolerancia Then
+
+                classificacao = "GEOMETRIAS IGUAIS"
+
+                observacao =
+                    "Foi encontrado um alinhamento com " &
+                    "volume residual dentro da tolerancia."
+
+            Else
+
+                classificacao = "GEOMETRIAS DIFERENTES"
+
+                observacao =
+                    "Todas as combinacoes validas apresentaram " &
+                    "volume residual acima da tolerancia."
+
+            End If
+
+            ' ==================================================
+            ' RELATORIO
+            ' ==================================================
+
+            Dim relatorio As String = ""
+
+            relatorio &= "COMPARACAO GEOMETRICA - INVENTOR 2020"
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "PECA A: " & docA.DisplayName
+            relatorio &= vbCrLf
+
+            relatorio &= "PECA B: " & docB.DisplayName
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "VOLUMES ORIGINAIS (cm3)"
+            relatorio &= vbCrLf
+
+            relatorio &= "A: " &
+                volumeOriginalA.ToString("F8",
+                CultureInfo.InvariantCulture)
+
+            relatorio &= vbCrLf
+
+            relatorio &= "B: " &
+                volumeOriginalB.ToString("F8",
+                CultureInfo.InvariantCulture)
+
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "ALINHAMENTO ENCONTRADO"
+            relatorio &= vbCrLf
+
+            relatorio &= "Rotacao X: " & melhorX & " graus"
+            relatorio &= vbCrLf
+
+            relatorio &= "Rotacao Y: " & melhorY & " graus"
+            relatorio &= vbCrLf
+
+            relatorio &= "Rotacao Z: " & melhorZ & " graus"
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "DIFERENCAS (cm3)"
+            relatorio &= vbCrLf
+
+            relatorio &= "A - B: " &
+                melhorAB.ToString("F8",
+                CultureInfo.InvariantCulture)
+
+            relatorio &= vbCrLf
+
+            relatorio &= "B - A: " &
+                melhorBA.ToString("F8",
+                CultureInfo.InvariantCulture)
+
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "RESIDUAL TOTAL: " &
+                If(
+                    testesValidos > 0,
+                    melhorResultado.ToString(
+                        "F8",
+                        CultureInfo.InvariantCulture),
+                    "NAO CALCULADO")
+
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "TESTES EXECUTADOS: " &
+                testesExecutados
+
+            relatorio &= vbCrLf
+
+            relatorio &= "TESTES VALIDOS: " &
+                testesValidos
+
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "TOLERANCIA: " &
+                tolerancia.ToString(
+                    "F8",
+                    CultureInfo.InvariantCulture) &
+                " cm3"
+
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= "RESULTADO: " & classificacao
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &= observacao
+
+            relatorio &= vbCrLf & vbCrLf
+
+            relatorio &=
+                "Os arquivos IPT originais nao foram modificados."
+
+            MessageBox.Show(
+                relatorio,
+                "Comparacao geometrica",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information)
+
+        Catch ex As Exception
+
+            MessageBox.Show(
+                "ERRO NA COMPARACAO" &
+                vbCrLf & vbCrLf &
+                "ETAPA: " & etapa &
+                vbCrLf & vbCrLf &
+                ex.Message,
+                "Erro",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error)
+
+        End Try
+
+    End Sub
+
+End Class
