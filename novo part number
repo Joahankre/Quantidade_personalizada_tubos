@@ -1,0 +1,713 @@
+Imports Inventor
+Imports System.Windows.Forms
+Imports System.IO
+Imports System.Text
+Imports System.Collections.Generic
+Imports System.Globalization
+
+
+Sub Main()
+
+    ' ==========================================================
+    ' VERIFICA DOCUMENTO ATIVO
+    ' ==========================================================
+
+    Dim oDoc As Document = ThisApplication.ActiveDocument
+
+    If oDoc.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
+
+        MessageBox.Show(
+            "Execute esta regra em uma montagem IAM.",
+            "Documento inválido")
+
+        Return
+
+    End If
+
+    Dim asmDoc As AssemblyDocument = CType(oDoc, AssemblyDocument)
+
+    ' ==========================================================
+    ' OBTÉM BOM MODEL DATA
+    ' ==========================================================
+
+    Dim bom As BOM = asmDoc.ComponentDefinition.BOM
+
+    bom.StructuredViewEnabled = True
+
+    Dim modelDataView As BOMView = Nothing
+
+    For Each view As BOMView In bom.BOMViews
+
+        If View.ViewType = BOMViewTypeEnum.kModelDataBOMViewType Then
+            modelDataView = View
+            Exit For
+        End If
+
+    Next
+
+    If modelDataView Is Nothing Then
+
+        MessageBox.Show(
+            "BOM Model Data não encontrada.",
+            "Erro")
+
+        Return
+
+    End If
+
+    ' ==========================================================
+    ' DICIONÁRIOS
+    ' ==========================================================
+
+    Dim frameRows As New List(Of BOMRow)
+
+    Dim documentos As New Dictionary(Of String, Document)(
+        StringComparer.InvariantCultureIgnoreCase)
+
+    Dim framesPorArquivo As New Dictionary(Of String, List(Of String))(
+        StringComparer.InvariantCultureIgnoreCase)
+
+    Dim grupos As New Dictionary(Of String, String)(
+        StringComparer.InvariantCultureIgnoreCase)
+
+    ' ==========================================================
+    ' ETAPA 1 - LOCALIZA TODOS OS FRAMES
+    ' ==========================================================
+
+    For Each row As BOMRow In modelDataView.BOMRows
+
+        ColetarFramesRecursivo(Row, frameRows)
+
+    Next
+
+    If frameRows.Count = 0 Then
+
+        MessageBox.Show(
+            "Nenhuma montagem com Part Number iniciado por Frame foi encontrada.",
+            "Informação")
+
+        Return
+
+    End If
+
+    ' ==========================================================
+    ' ETAPA 2 - COLETA OS IPT DOS FRAMES
+    ' ==========================================================
+
+    For Each frameRow As BOMRow In frameRows
+
+        Try
+
+            Dim frameDoc As Document =
+                frameRow.ComponentDefinitions.Item(1).Document
+
+            Dim framePN As String =
+                ObterPropriedade(
+                    frameDoc,
+                    "Design Tracking Properties",
+                    "Part Number")
+
+            Dim frameNome As String =
+                framePN & " [" & frameDoc.DisplayName & "]"
+
+            If frameRow.ChildRows IsNot Nothing Then
+
+                For Each child As BOMRow In frameRow.ChildRows
+
+                    ColetarPecasFrame(
+                        child,
+                        frameNome,
+                        documentos,
+                        framesPorArquivo)
+
+                Next
+
+            End If
+
+        Catch
+        End Try
+
+    Next
+
+    If documentos.Count = 0 Then
+
+        MessageBox.Show(
+            "Nenhum arquivo IPT foi encontrado dentro dos Frames.",
+            "Informação")
+
+        Return
+
+    End If
+
+    ' ==========================================================
+    ' ETAPA 3 - ANALISA GEOMETRIA
+    ' ==========================================================
+
+    Dim sb As New StringBuilder()
+
+    sb.AppendLine(
+        "ARQUIVOS;PART NUMBER ATUAL;SIZE DESIGNATION;NOVO PART NUMBER (SIMULACAO);" &
+        "DESCRICAO;MATERIAL;CORPOS SOLIDOS;VOLUME DATABASE;MASSA KG;" &
+        "DIMENSAO X MM;DIMENSAO Y MM;DIMENSAO Z MM;" &
+        "COMPRIMENTO APROX MM;GRUPO PRELIMINAR;FRAMES")
+
+    Dim contadorGrupo As Integer = 0
+
+    For Each kvp As KeyValuePair(Of String, Document) In documentos
+
+        Try
+
+            Dim partDoc As PartDocument =
+                CType(kvp.Value, PartDocument)
+
+            Dim pn As String =
+                ObterPropriedade(
+                    partDoc,
+                    "Design Tracking Properties",
+                    "Part Number")
+
+            Dim descricao As String =
+                ObterPropriedade(
+                    partDoc,
+                    "Design Tracking Properties",
+                    "Description")
+
+            Dim material As String = "NAO IDENTIFICADO"
+
+            Try
+                material = partDoc.ComponentDefinition.Material.Name
+            Catch
+            End Try
+
+            ' --------------------------------------------------
+            ' CONTAGEM DOS CORPOS SOLIDOS
+            ' --------------------------------------------------
+
+            Dim corposSolidos As Integer = 0
+
+            For Each body As SurfaceBody In
+                partDoc.ComponentDefinition.SurfaceBodies
+
+                If body.IsSolid Then
+                    corposSolidos += 1
+                End If
+
+            Next
+
+            ' --------------------------------------------------
+            ' MASSA E VOLUME
+            ' --------------------------------------------------
+
+            Dim massa As Double = 0
+            Dim volume As Double = 0
+
+            Try
+
+                Dim massProps As MassProperties =
+                    partDoc.ComponentDefinition.MassProperties
+
+                massa = massProps.Mass
+                volume = massProps.Volume
+
+            Catch
+            End Try
+
+            ' --------------------------------------------------
+            ' MASSA EM KG
+            ' --------------------------------------------------
+
+            Dim massaKg As Double = massa
+
+            Dim massaNome As String =
+                massaKg.ToString(
+                    "F3",
+                    CultureInfo.InvariantCulture)
+
+            ' --------------------------------------------------
+            ' DIMENSOES DA CAIXA ENVOLVENTE
+            ' --------------------------------------------------
+
+            Dim dx As Double = 0
+            Dim dy As Double = 0
+            Dim dz As Double = 0
+
+            Try
+
+                Dim rangeBox As Box =
+                    partDoc.ComponentDefinition.RangeBox
+
+                Dim pMin As Point = rangeBox.MinPoint
+                Dim pMax As Point = rangeBox.MaxPoint
+
+                dx = Math.Abs(pMax.X - pMin.X) * 10
+                dy = Math.Abs(pMax.Y - pMin.Y) * 10
+                dz = Math.Abs(pMax.Z - pMin.Z) * 10
+
+            Catch
+            End Try
+
+            ' --------------------------------------------------
+            ' COMPRIMENTO APROXIMADO
+            ' --------------------------------------------------
+
+            Dim comprimento As Double =
+                Math.Max(dx, Math.Max(dy, dz))
+
+            ' --------------------------------------------------
+            ' ORDENA DIMENSOES
+            ' --------------------------------------------------
+
+            Dim dimensoes() As Double = {dx, dy, dz}
+
+            Array.Sort(dimensoes)
+
+            ' --------------------------------------------------
+            ' SIZE DESIGNATION
+            ' --------------------------------------------------
+
+            
+' --------------------------------------------------
+' FAMILY - FRAME GENERATOR
+' --------------------------------------------------
+
+Dim family As String =
+    ObterPropriedade(
+        partDoc,
+        "Content Library Component Properties",
+        "Family")
+
+' --------------------------------------------------
+' SIZE DESIGNATION
+' --------------------------------------------------
+
+Dim sizeDesignation As String =
+    ObterSizeDesignation(partDoc)
+
+' --------------------------------------------------
+' NORMALIZA FAMILY
+' --------------------------------------------------
+
+Dim familyPN As String = ""
+
+If Not String.IsNullOrWhiteSpace(family) Then
+
+    familyPN = family.Trim().ToUpperInvariant()
+
+    familyPN = familyPN.Replace(" ", "-")
+    familyPN = familyPN.Replace("_", "-")
+
+End If
+
+' --------------------------------------------------
+' NORMALIZA SIZE DESIGNATION
+' --------------------------------------------------
+
+Dim secaoPN As String = ""
+
+If Not String.IsNullOrWhiteSpace(sizeDesignation) Then
+
+    secaoPN = sizeDesignation.Trim().ToUpperInvariant()
+
+    secaoPN = secaoPN.Replace(" ", "")
+    secaoPN = secaoPN.Replace("MM", "")
+    secaoPN = secaoPN.Replace(",", ".")
+    secaoPN = secaoPN.Replace("×", "X")
+
+End If
+
+            ' --------------------------------------------------
+            ' COMPRIMENTO PARA O PART NUMBER
+            ' --------------------------------------------------
+
+            Dim comprimentoPN As String =
+                Math.Round(comprimento, 0).ToString(
+                    "0000",
+                    CultureInfo.InvariantCulture)
+
+            ' --------------------------------------------------
+            ' MASSA PARA O PART NUMBER
+            ' --------------------------------------------------
+
+            Dim massaPN As String =
+                massaKg.ToString(
+                    "F3",
+                    CultureInfo.InvariantCulture)
+
+            ' --------------------------------------------------
+            ' NOVO PART NUMBER FICTICIO
+            ' --------------------------------------------------
+
+           
+
+' --------------------------------------------------
+' NOVO PART NUMBER FICTICIO - FORMATO LEGIVEL
+' --------------------------------------------------
+
+Dim novoPN As String = ""
+
+Dim comprimentoTexto As String =
+    Math.Round(comprimento, 0).ToString(
+        "0",
+        CultureInfo.InvariantCulture)
+
+Dim massaTexto As String =
+    massaKg.ToString(
+        "F3",
+        CultureInfo.InvariantCulture)
+
+If family <> "" AndAlso
+   secaoPN <> "" AndAlso
+   comprimento > 0 Then
+
+    novoPN =
+        family.Trim().ToUpperInvariant() &
+        " - " &
+        secaoPN &
+        " - " &
+        comprimentoTexto &
+        "mm - " &
+        massaTexto &
+        "kg"
+
+Else
+
+    novoPN = "DADOS-INCOMPLETOS"
+
+End If
+
+            ' --------------------------------------------------
+            ' CHAVE PRELIMINAR
+            ' --------------------------------------------------
+
+            Dim chave As String =
+                material.Trim().ToUpperInvariant() & "|" &
+                corposSolidos.ToString() & "|" &
+                Math.Round(volume, 5).ToString(
+                    "F5",
+                    CultureInfo.InvariantCulture) & "|" &
+                Math.Round(dimensoes(0), 2).ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture) & "|" &
+                Math.Round(dimensoes(1), 2).ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture) & "|" &
+                Math.Round(dimensoes(2), 2).ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture)
+
+            ' --------------------------------------------------
+            ' ATRIBUI GRUPO PRELIMINAR
+            ' --------------------------------------------------
+
+            If Not grupos.ContainsKey(chave) Then
+
+                contadorGrupo += 1
+
+                grupos.Add(
+                    chave,
+                    "G" & contadorGrupo.ToString("0000"))
+
+            End If
+
+            Dim grupo As String = grupos(chave)
+
+            ' --------------------------------------------------
+            ' LISTA DOS FRAMES RELACIONADOS
+            ' --------------------------------------------------
+
+            Dim listaFrames As String = ""
+
+            If framesPorArquivo.ContainsKey(kvp.Key) Then
+
+                listaFrames = String.Join(
+                    " | ",
+                    framesPorArquivo(kvp.Key).ToArray())
+
+            End If
+
+            ' --------------------------------------------------
+            ' GERA LINHA DO RELATORIO
+            ' --------------------------------------------------
+
+            Dim linha As String =
+                LimparCSV(kvp.Key) & ";" &
+                LimparCSV(pn) & ";" &
+                LimparCSV(sizeDesignation) & ";" &
+                LimparCSV(novoPN) & ";" &
+                LimparCSV(descricao) & ";" &
+                LimparCSV(material) & ";" &
+                corposSolidos.ToString() & ";" &
+                volume.ToString(
+                    "F6",
+                    CultureInfo.InvariantCulture) & ";" &
+                massaKg.ToString(
+                    "F3",
+                    CultureInfo.InvariantCulture) & ";" &
+                dx.ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture) & ";" &
+                dy.ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture) & ";" &
+                dz.ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture) & ";" &
+                comprimento.ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture) & ";" &
+                grupo & ";" &
+                LimparCSV(listaFrames)
+
+            sb.AppendLine(linha)
+
+        Catch ex As Exception
+
+            sb.AppendLine(
+                LimparCSV(kvp.Key) &
+                ";ERRO DE LEITURA;" &
+                LimparCSV(ex.Message))
+
+        End Try
+
+    Next
+
+    ' ==========================================================
+    ' GERA ARQUIVO CSV
+    ' ==========================================================
+
+    Try
+
+        Dim pasta As String =
+            System.IO.Path.GetDirectoryName(oDoc.FullFileName)
+
+        Dim arquivo As String =
+            System.IO.Path.Combine(
+                pasta,
+                "Analise_Geometrica_Frames.csv")
+
+        System.IO.File.WriteAllText(
+            arquivo,
+            sb.ToString(),
+            Encoding.UTF8)
+
+        MessageBox.Show(
+            "Análise concluída!" & vbCrLf & vbCrLf &
+            "Frames encontrados: " & frameRows.Count & vbCrLf &
+            "Arquivos IPT analisados: " & documentos.Count & vbCrLf &
+            "Grupos preliminares: " & grupos.Count & vbCrLf & vbCrLf &
+            "Relatório:" & vbCrLf & arquivo & vbCrLf & vbCrLf &
+            "Nenhum Part Number foi alterado.",
+            "Análise geométrica concluída",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information)
+
+    Catch ex As Exception
+
+        MessageBox.Show(
+            "Erro ao salvar relatório: " & ex.Message,
+            "Erro")
+
+    End Try
+
+End Sub
+
+' ==============================================================
+' LOCALIZA FRAMES RECURSIVAMENTE
+' ==============================================================
+
+Sub ColetarFramesRecursivo(
+    Row As BOMRow,
+    lista As List(Of BOMRow))
+
+    Try
+
+        If Row.ComponentDefinitions.Count > 0 Then
+
+            Dim doc As Document =
+                Row.ComponentDefinitions.Item(1).Document
+
+            Dim pn As String =
+                ObterPropriedade(
+                    doc,
+                    "Design Tracking Properties",
+                    "Part Number")
+
+            If pn.StartsWith(
+                "Frame",
+                StringComparison.InvariantCultureIgnoreCase) Then
+
+                lista.Add(Row)
+
+            End If
+
+            If pn.StartsWith(
+                "Skeleton",
+                StringComparison.InvariantCultureIgnoreCase) Then
+
+                Return
+
+            End If
+
+        End If
+
+        If Row.ChildRows IsNot Nothing Then
+
+            For Each child As BOMRow In Row.ChildRows
+
+                ColetarFramesRecursivo(child, lista)
+
+            Next
+
+        End If
+
+    Catch
+    End Try
+
+End Sub
+
+
+' ==============================================================
+' COLETA ARQUIVOS IPT DENTRO DOS FRAMES
+' ==============================================================
+
+Sub ColetarPecasFrame(
+    row As BOMRow,
+    frameNome As String,
+    documentos As Dictionary(Of String, Document),
+    framesPorArquivo As Dictionary(Of String, List(Of String)))
+
+    Try
+
+        If row.ComponentDefinitions.Count > 0 Then
+
+            For Each compDef As ComponentDefinition In
+                row.ComponentDefinitions
+
+                Try
+
+                    Dim doc As Document = compDef.Document
+
+                    If doc.DocumentType =
+                        DocumentTypeEnum.kPartDocumentObject Then
+
+                        Dim caminho As String = doc.FullFileName
+
+                        If Not documentos.ContainsKey(caminho) Then
+
+                            documentos.Add(caminho, doc)
+
+                        End If
+
+                        If Not framesPorArquivo.ContainsKey(caminho) Then
+
+                            framesPorArquivo.Add(
+                                caminho,
+                                New List(Of String))
+
+                        End If
+
+                        If Not framesPorArquivo(caminho).Contains(frameNome) Then
+
+                            framesPorArquivo(caminho).Add(frameNome)
+
+                        End If
+
+                    End If
+
+                Catch
+                End Try
+
+            Next
+
+        End If
+
+        If row.ChildRows IsNot Nothing Then
+
+            For Each child As BOMRow In row.ChildRows
+
+                ColetarPecasFrame(
+                    child,
+                    frameNome,
+                    documentos,
+                    framesPorArquivo)
+
+            Next
+
+        End If
+
+    Catch
+    End Try
+
+End Sub
+
+' ==============================================================
+' LE PROPRIEDADES DO DOCUMENTO
+' ==============================================================
+
+Function ObterPropriedade(
+    doc As Document,
+    conjunto As String,
+    propriedade As String) As String
+
+    Try
+
+        Return CStr(
+            doc.PropertySets.Item(conjunto).Item(propriedade).Value)
+
+    Catch
+
+        Return ""
+
+    End Try
+
+End Function
+
+
+' ==============================================================
+' OBTEM SIZE DESIGNATION DO FRAME GENERATOR
+' ==============================================================
+
+Function ObterSizeDesignation(doc As Document) As String
+
+    Try
+
+        For Each propSet As PropertySet In doc.PropertySets
+
+            For Each prop As Inventor.Property In propSet
+
+                If String.Equals(
+                    prop.Name.Trim(),
+                    "Size Designation",
+                    StringComparison.InvariantCultureIgnoreCase) Then
+
+                    If prop.Value IsNot Nothing Then
+                        Return prop.Value.ToString().Trim()
+                    End If
+
+                End If
+
+            Next
+
+        Next
+
+    Catch
+    End Try
+
+    Return ""
+
+End Function
+
+
+' ==============================================================
+' LIMPEZA DE CAMPOS CSV
+' ==============================================================
+
+Function LimparCSV(valor As String) As String
+
+    If valor Is Nothing Then Return ""
+
+    Return """" &
+        valor.Replace("""", """""").Replace(";", ",") &
+        """"
+
+End Function
