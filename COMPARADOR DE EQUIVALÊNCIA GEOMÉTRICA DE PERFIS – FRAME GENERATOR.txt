@@ -1,0 +1,437 @@
+Imports Inventor
+Imports System.Windows.Forms
+Imports System.IO
+
+
+Public Class ThisRule
+
+    Sub Main()
+
+        Dim etapa As String = "INICIALIZACAO"
+
+        Try
+
+            ' ==============================================
+            ' 1 - VERIFICAR MONTAGEM
+            ' ==============================================
+
+            Dim asmDoc As AssemblyDocument =
+                TryCast(ThisApplication.ActiveDocument, AssemblyDocument)
+
+            If asmDoc Is Nothing Then
+                MessageBox.Show("Abra uma montagem IAM.")
+                Return
+            End If
+
+            ' ==============================================
+            ' 2 - SELECIONAR PECAS
+            ' ==============================================
+
+            etapa = "SELECAO DA PRIMEIRA PECA"
+
+            Dim selecao1 As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a PRIMEIRA peça")
+
+            If selecao1 Is Nothing Then Return
+
+            etapa = "SELECAO DA SEGUNDA PECA"
+
+            Dim selecao2 As Object =
+                ThisApplication.CommandManager.Pick(
+                    SelectionFilterEnum.kAssemblyLeafOccurrenceFilter,
+                    "Selecione a SEGUNDA peça")
+
+            If selecao2 Is Nothing Then Return
+
+            ' ==============================================
+            ' 3 - IDENTIFICAR DOCUMENTOS
+            ' ==============================================
+
+            etapa = "IDENTIFICACAO DOS DOCUMENTOS"
+
+            Dim doc1 As PartDocument =
+                TryCast(selecao1.Definition.Document, PartDocument)
+
+            Dim doc2 As PartDocument =
+                TryCast(selecao2.Definition.Document, PartDocument)
+
+            If doc1 Is Nothing OrElse doc2 Is Nothing Then
+                Throw New Exception("Selecione dois arquivos IPT.")
+            End If
+
+            Dim nome1 As String = doc1.DisplayName
+            Dim nome2 As String = doc2.DisplayName
+
+            ' ==============================================
+            ' 4 - VERIFICAR MESMO ARQUIVO
+            ' ==============================================
+
+            If String.Equals(
+                doc1.FullFileName,
+                doc2.FullFileName,
+                StringComparison.OrdinalIgnoreCase) Then
+
+                MessageBox.Show(
+                    "MESMO ARQUIVO IPT." & vbCrLf & vbCrLf &
+                    "As duas ocorrências apontam para o mesmo documento.",
+                    "Resultado")
+
+                Return
+
+            End If
+
+            ' ==============================================
+            ' 5 - IDENTIFICAR CORPOS SOLIDOS
+            ' ==============================================
+
+            etapa = "IDENTIFICACAO DOS CORPOS"
+
+            Dim corpo1 As SurfaceBody = Nothing
+            Dim corpo2 As SurfaceBody = Nothing
+
+            Dim qtd1 As Integer = 0
+            Dim qtd2 As Integer = 0
+
+            For Each body As SurfaceBody In
+                doc1.ComponentDefinition.SurfaceBodies
+
+                If body.IsSolid Then
+                    qtd1 += 1
+                    corpo1 = body
+                End If
+
+            Next
+
+            For Each body As SurfaceBody In
+                doc2.ComponentDefinition.SurfaceBodies
+
+                If body.IsSolid Then
+                    qtd2 += 1
+                    corpo2 = body
+                End If
+
+            Next
+
+            If qtd1 <> 1 OrElse qtd2 <> 1 Then
+
+                Throw New Exception(
+                    "O teste exige exatamente um corpo sólido em cada IPT." &
+                    vbCrLf & vbCrLf &
+                    "Peça 1: " & qtd1 &
+                    vbCrLf &
+                    "Peça 2: " & qtd2)
+
+            End If
+
+            ' ==============================================
+            ' 6 - CONFIGURAR TRANSIENT BREP
+            ' ==============================================
+
+            etapa = "PREPARACAO DOS CORPOS TEMPORARIOS"
+
+            Dim tb As TransientBRep =
+                ThisApplication.TransientBRep
+
+            Dim tg As TransientGeometry =
+                ThisApplication.TransientGeometry
+
+            ' ==============================================
+            ' 7 - VOLUMES ORIGINAIS
+            ' ==============================================
+
+            etapa = "CALCULO DOS VOLUMES ORIGINAIS"
+
+            Dim precisaoVolume As Double = 0.0001
+
+            Dim volume1 As Double =
+                corpo1.Volume(precisaoVolume)
+
+            Dim volume2 As Double =
+                corpo2.Volume(precisaoVolume)
+
+            Dim toleranciaVolume As Double = 0.000001
+
+            ' ==============================================
+            ' 8 - DEFINIR ANGULOS
+            ' ==============================================
+
+            etapa = "DEFINICAO DOS ANGULOS"
+
+            Dim angulos() As Integer = {0, 90, 180, 270}
+
+            Dim resultado As String = ""
+            Dim detalhe As String = ""
+
+            Dim anguloEncontrado As Integer = -1
+
+            Dim historico As String = ""
+
+            ' ==============================================
+            ' 9 - EXECUTAR COMPARACOES
+            ' ==============================================
+
+            For Each angulo As Integer In angulos
+
+                etapa = "TESTANDO ROTACAO " & angulo & " GRAUS"
+
+                ' ------------------------------------------
+                ' CRIAR COPIAS TEMPORARIAS
+                ' ------------------------------------------
+
+                Dim copiaA As SurfaceBody =
+                    tb.Copy(corpo1)
+
+                Dim copiaB As SurfaceBody =
+                    tb.Copy(corpo2)
+
+                ' ------------------------------------------
+                ' ROTACIONAR PECA B NO EIXO Z
+                ' ------------------------------------------
+
+                If angulo <> 0 Then
+
+                    Dim eixoZ As Vector =
+    tg.CreateVector(0, 0, 1)
+
+                    Dim origem As Point =
+                        tg.CreatePoint(0, 0, 0)
+
+                    Dim matrizRotacao As Matrix =
+                        tg.CreateMatrix()
+
+                    matrizRotacao.SetToRotation(
+                        angulo * Math.PI / 180.0,
+                        eixoZ,
+                        origem)
+
+                    ' METODO CORRETO DO TRANSIENT BREP
+
+                    tb.Transform(copiaB, matrizRotacao)
+
+                End If
+
+                ' ------------------------------------------
+                ' NORMALIZAR POSICAO DOS CORPOS
+                ' ------------------------------------------
+
+                NormalizarCorpo(copiaA, tb, tg)
+
+                NormalizarCorpo(copiaB, tb, tg)
+
+                ' ------------------------------------------
+                ' CRIAR COPIAS PARA DIFERENCAS
+                ' ------------------------------------------
+
+                Dim diferencaA As SurfaceBody =
+                    tb.Copy(copiaA)
+
+                Dim ferramentaB As SurfaceBody =
+                    tb.Copy(copiaB)
+
+                Dim diferencaB As SurfaceBody =
+                    tb.Copy(copiaB)
+
+                Dim ferramentaA As SurfaceBody =
+                    tb.Copy(copiaA)
+
+                ' ------------------------------------------
+                ' DIFERENCA A MENOS B
+                ' ------------------------------------------
+
+                etapa = "DIFERENCA A MENOS B - " & angulo
+
+                tb.DoBoolean(
+                    diferencaA,
+                    ferramentaB,
+                    BooleanTypeEnum.kBooleanTypeDifference)
+
+                Dim volumeAmenosB As Double =
+                    diferencaA.Volume(precisaoVolume)
+
+                ' ------------------------------------------
+                ' DIFERENCA B MENOS A
+                ' ------------------------------------------
+
+                etapa = "DIFERENCA B MENOS A - " & angulo
+
+                tb.DoBoolean(
+                    diferencaB,
+                    ferramentaA,
+                    BooleanTypeEnum.kBooleanTypeDifference)
+
+                Dim volumeBmenosA As Double =
+                    diferencaB.Volume(precisaoVolume)
+
+                ' ------------------------------------------
+                ' VERIFICAR RESULTADOS
+                ' ------------------------------------------
+
+                Dim igualA As Boolean =
+                    volumeAmenosB <= toleranciaVolume
+
+                Dim igualB As Boolean =
+                    volumeBmenosA <= toleranciaVolume
+
+                historico &=
+                    "ROTACAO: " & angulo & " GRAUS" &
+                    vbCrLf &
+                    "A - B: " &
+                    volumeAmenosB.ToString("F8") &
+                    " cm3" &
+                    vbCrLf &
+                    "B - A: " &
+                    volumeBmenosA.ToString("F8") &
+                    " cm3" &
+                    vbCrLf & vbCrLf
+
+                ' ------------------------------------------
+                ' CLASSIFICAR
+                ' ------------------------------------------
+
+                If igualA AndAlso igualB Then
+
+                    anguloEncontrado = angulo
+
+                    resultado = "GEOMETRIAS IGUAIS"
+
+                    detalhe =
+                        "As peças possuem geometria equivalente." &
+                        vbCrLf &
+                        "Angulo de equivalencia: " &
+                        angulo & " graus."
+
+                    Exit For
+
+                End If
+
+            Next
+
+            ' ==============================================
+            ' 10 - CLASSIFICACAO FINAL
+            ' ==============================================
+
+            If anguloEncontrado = -1 Then
+
+                resultado = "GEOMETRIAS DIFERENTES"
+
+                detalhe =
+                    "Nenhuma das quatro orientacoes apresentou " &
+                    "igualdade geometrica dentro da tolerancia."
+
+            End If
+
+            ' ==============================================
+            ' 11 - RELATORIO
+            ' ==============================================
+
+            Dim relatorio As String = ""
+
+            relatorio &=
+                "COMPARACAO GEOMETRICA - INVENTOR 2020" &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "PECA A: " & nome1 &
+                vbCrLf
+
+            relatorio &=
+                "PECA B: " & nome2 &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "VOLUMES ORIGINAIS (cm3)" &
+                vbCrLf
+
+            relatorio &=
+                "A: " & volume1.ToString("F8") &
+                vbCrLf
+
+            relatorio &=
+                "B: " & volume2.ToString("F8") &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "HISTORICO DAS ROTACOES" &
+                vbCrLf & vbCrLf
+
+            relatorio &= historico
+
+            relatorio &=
+                "TOLERANCIA: " &
+                toleranciaVolume.ToString("F8") &
+                " cm3" &
+                vbCrLf & vbCrLf
+
+            relatorio &=
+                "RESULTADO:" &
+                vbCrLf &
+                resultado &
+                vbCrLf & vbCrLf &
+                detalhe
+
+            MessageBox.Show(
+                relatorio,
+                "Teste de geometria",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information)
+
+        Catch ex As Exception
+
+            MessageBox.Show(
+                "ERRO DURANTE O TESTE" &
+                vbCrLf & vbCrLf &
+                "ETAPA: " & etapa &
+                vbCrLf & vbCrLf &
+                ex.Message &
+                vbCrLf & vbCrLf &
+                "Nenhum arquivo original foi alterado.",
+                "Erro",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error)
+
+        End Try
+
+    End Sub
+
+    ' ==============================================
+    ' NORMALIZAR CORPO TEMPORARIO
+    ' CENTRALIZAR X E Y
+    ' ALINHAR INICIO DO Z
+    ' ==============================================
+
+    Private Sub NormalizarCorpo(
+        corpo As SurfaceBody,
+        tb As TransientBRep,
+        tg As TransientGeometry)
+
+        Dim caixa As Box = corpo.RangeBox
+
+        Dim centroX As Double =
+            (caixa.MinPoint.X + caixa.MaxPoint.X) / 2.0
+
+        Dim centroY As Double =
+            (caixa.MinPoint.Y + caixa.MaxPoint.Y) / 2.0
+
+        Dim inicioZ As Double =
+            caixa.MinPoint.Z
+
+        Dim deslocamento As Vector =
+            tg.CreateVector(
+                -centroX,
+                -centroY,
+                -inicioZ)
+
+        Dim matriz As Matrix =
+            tg.CreateMatrix()
+
+        matriz.SetTranslation(deslocamento)
+
+        ' TRANSFORMACAO DO CORPO TEMPORARIO
+
+        tb.Transform(corpo, matriz)
+
+    End Sub
+
+End Class
